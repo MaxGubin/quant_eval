@@ -1,0 +1,17 @@
+[package]
+name = "quant_eval"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
+candle-core = {path="../candle/candle-core"}
+candle-transformers = {path="../candle/candle-transformers"} 
+candle-nn = {path="../candle/candle-nn"}
+clap = { version = "4.2.4", features = ["derive"] }
+hf-hub = "0.3.0"
+serde = { version = "1.0.171", features = ["derive"] }
+serde_json = "1.0.105"
+tracing = "0.1.37"
