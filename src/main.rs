@@ -1,4 +1,3 @@
-use std::{any, sync::Arc};
 
 use candle_core::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
@@ -8,7 +7,6 @@ use std::io::Write;
 
 mod config;
 use config::{Config, Prompts};
-use tokenizers::Model;
 
 mod model;
 
@@ -80,7 +78,7 @@ fn print_token(tokenizer: &tokenizers::Tokenizer, token: u32) {
         }
         None => print!("<UNK>"),
     }
-    std::io::stdout().flush();
+    let _ = std::io::stdout().flush();
 }
 fn process_models(args: &Args) -> anyhow::Result<()> {
     let config = args.load_config()?;
