@@ -13,5 +13,7 @@ candle-nn = {path="../candle/candle-nn"}
 clap = { version = "4.2.4", features = ["derive"] }
 hf-hub = "0.3.0"
 serde = { version = "1.0.171", features = ["derive"] }
+onig = { version = "6.0", default-features = false, optional = true }
 serde_json = "1.0.105"
+tokenizers = { path="../tokenizers/tokenizers"}
 tracing = "0.1.37"

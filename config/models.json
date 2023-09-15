@@ -1,0 +1,8 @@
+{
+    "models": [
+    {
+        "name": "Llama7b",
+        "model_path": "../models/llama-2-7b-chat-hf.gguf"
+    }
+    ]
+}
