@@ -1,10 +1,5 @@
-
-
-
-
 // =================================================================================================
 // Configuration parameter.
-
 
 #[derive(Debug, serde::Deserialize)]
 pub struct ModelConfig {
@@ -13,17 +8,17 @@ pub struct ModelConfig {
 
     /// The path to the model.
     pub model_path: String,
-    
+
     /// The tokenizer parameters
     #[serde(default)]
     pub tokenizer: String,
 
     /// Model Architecture.
     #[serde(default)]
-    pub architecture: String,   
+    pub architecture: String,
 
     /// Max sequence length.
-    #[serde(default="max_seq_len_defalt")]
+    #[serde(default = "max_seq_len_defalt")]
     pub max_seq_len: usize,
 }
 
@@ -35,7 +30,6 @@ fn max_seq_len_defalt() -> usize {
 pub struct Config {
     pub models: Vec<ModelConfig>,
 }
-
 
 #[derive(Debug, serde::Deserialize)]
 pub struct OnePrompt {

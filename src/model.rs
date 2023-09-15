@@ -1,7 +1,5 @@
 /// Implementation of quantized GPT model (Llama based)
 /// from Candle
-
-
 use std::collections::HashMap;
 
 use candle_core::quantized::QTensor;
@@ -34,7 +32,6 @@ struct QMatMul {
     inner: candle_core::quantized::QMatMul,
     span: tracing::Span,
 }
-
 
 impl QMatMul {
     fn from_qtensor(qtensor: QTensor) -> Self {
@@ -181,8 +178,11 @@ pub struct ModelWeights {
     span_output: tracing::Span,
 }
 
-
-fn precomput_freqs_cis(head_dim: usize, freq_base: f32, max_seq_len: usize) -> Result<(Tensor, Tensor)> {
+fn precomput_freqs_cis(
+    head_dim: usize,
+    freq_base: f32,
+    max_seq_len: usize,
+) -> Result<(Tensor, Tensor)> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
@@ -198,7 +198,11 @@ fn precomput_freqs_cis(head_dim: usize, freq_base: f32, max_seq_len: usize) -> R
 }
 
 impl ModelWeights {
-    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize, max_seq_len: usize) -> anyhow::Result<Self> {
+    pub fn from_ggml(
+        mut ct: ggml_file::Content,
+        gqa: usize,
+        max_seq_len: usize,
+    ) -> anyhow::Result<Self> {
         let cpu = &Device::Cpu;
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let (cos, sin) = precomput_freqs_cis(head_dim, 10000., max_seq_len)?;
@@ -380,14 +384,14 @@ impl ModelWeights {
 
 /// Loads the tokenizer.
 pub fn load_tokenizer(config: &ModelConfig) -> anyhow::Result<tokenizers::Tokenizer> {
-    tokenizers::Tokenizer::from_file(
-        if config.tokenizer.is_empty() {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("hf-internal-testing/llama-tokenizer".to_string());
-            api.get("tokenizer.json")?
-        } else {
-            std::path::PathBuf::from(&config.tokenizer)
-        }).map_err(anyhow::Error::msg)
+    tokenizers::Tokenizer::from_file(if config.tokenizer.is_empty() {
+        let api = hf_hub::api::sync::Api::new()?;
+        let api = api.model("hf-internal-testing/llama-tokenizer".to_string());
+        api.get("tokenizer.json")?
+    } else {
+        std::path::PathBuf::from(&config.tokenizer)
+    })
+    .map_err(anyhow::Error::msg)
 }
 
 /// Loads the model.
@@ -406,5 +410,6 @@ pub fn load_model(config: &ModelConfig) -> anyhow::Result<ModelWeights> {
             ModelWeights::from_gguf(model, &mut file, config.max_seq_len)
         }
         _ => Err(anyhow::anyhow!("Unknown model format")),
-    }).map_err(anyhow::Error::msg)
+    })
+    .map_err(anyhow::Error::msg)
 }
