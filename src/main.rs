@@ -1,4 +1,3 @@
-
 use candle_core::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 #[allow(unused_imports, unused_variables)]
@@ -86,7 +85,8 @@ fn process_models(args: &Args) -> anyhow::Result<()> {
 
     for mc in config.models {
         println!("Loading model: {}", mc.name);
-        let mut model = model::load_model(&mc)?;
+        let model = model::load_model(&mc)?;
+        let mut masks = model::CausalAttnMasks::new();
         let tokenizer = model::load_tokenizer(&mc)?;
         for p in prompts.prompts.iter() {
             println!("Prompt: {}", p.prompt);
@@ -102,18 +102,25 @@ fn process_models(args: &Args) -> anyhow::Result<()> {
                 .unwrap_or_else(|| 100)
                 .saturating_sub(prompt_tokens.len());
 
+            let mut kv_cache = model.create_kv_cache();
+
             // The first token is generated  a different way as we want to process all prompt tokens in parallel.
             // This token will be used in the loop.
             let mut next_token = {
                 let input = Tensor::new(prompt_tokens.as_slice(), &Device::Cpu)?.unsqueeze(0)?;
-                let logits = model.forward(&input, 0)?;
+                let logits;
+                let mask = masks.get_mask(&input)?;
+                (logits, kv_cache) = model.forward(&input, 0, &mask, &kv_cache)?;
                 let logits = logits.squeeze(0)?;
                 logits_processor.sample(&logits)?
             };
 
             for index in 0..to_sample {
                 let input = Tensor::new(&[next_token], &Device::Cpu)?.unsqueeze(0)?;
-                let logits = model.forward(&input, prompt_tokens.len() + index)?;
+                let index_pos = prompt_tokens.len() + index;
+                let mask = masks.get_mask(&input)?;
+                let logits;
+                (logits, kv_cache) = model.forward(&input, index_pos, &mask, &kv_cache)?;
                 let logits = logits.squeeze(0)?;
                 next_token = logits_processor.sample(&logits)?;
                 print_token(&tokenizer, next_token);

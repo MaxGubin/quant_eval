@@ -61,7 +61,6 @@ struct LayerWeights {
     head_dim: usize,
     cos: Tensor,
     sin: Tensor,
-    kv_cache: Option<(Tensor, Tensor)>,
     span_attn: tracing::Span,
     span_rot: tracing::Span,
     span_mlp: tracing::Span,
@@ -104,7 +103,13 @@ impl LayerWeights {
         Ok(rope)
     }
 
-    fn forward_attn(&mut self, x: &Tensor, mask: &Tensor, index_pos: usize) -> Result<Tensor> {
+    fn forward_attn(
+        &self,
+        x: &Tensor,
+        mask: &Tensor,
+        index_pos: usize,
+        kv_cache: &Option<(Tensor, Tensor)>,
+    ) -> Result<(Tensor, Option<(Tensor, Tensor)>)> {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
         let q = self.attention_wq.forward(x)?;
@@ -124,7 +129,7 @@ impl LayerWeights {
         let q = self.apply_rotary_emb(&q, index_pos)?;
         let k = self.apply_rotary_emb(&k, index_pos)?;
 
-        let (k, v) = match &self.kv_cache {
+        let (k, v) = match &kv_cache {
             None => (k, v),
             Some((k_cache, v_cache)) => {
                 if index_pos == 0 {
@@ -136,7 +141,7 @@ impl LayerWeights {
                 }
             }
         };
-        self.kv_cache = Some((k.clone(), v.clone()));
+        let kv_cache = Some((k.clone(), v.clone()));
 
         // Support for MQA, useful for 70B models.
         let k = self.repeat_kv(k)?;
@@ -150,7 +155,7 @@ impl LayerWeights {
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.forward(&y)?;
-        Ok(y)
+        Ok((y, kv_cache))
     }
 
     fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
@@ -168,12 +173,34 @@ impl LayerWeights {
     }
 }
 
+pub struct CausalAttnMasks(HashMap<usize, Tensor>);
+
+impl CausalAttnMasks {
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    pub fn get_mask(&mut self, input: &Tensor) -> Result<Tensor> {
+        let (_b_sz, seq_len) = input.dims2()?;
+        if let Some(mask) = self.0.get(&seq_len) {
+            Ok(mask.clone())
+        } else {
+            let mask: Vec<_> = (0..seq_len)
+                .flat_map(|i| (0..seq_len).map(move |j| u8::from(j > i)))
+                .collect();
+            let mask = Tensor::from_slice(&mask, (seq_len, seq_len), &Device::Cpu)?;
+            self.0.insert(seq_len, mask.clone());
+            Ok(mask)
+        }
+    }
+}
+
 pub struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
     norm: RmsNorm,
     output: QMatMul,
-    masks: HashMap<usize, Tensor>,
+    //masks: HashMap<usize, Tensor>,
     span: tracing::Span,
     span_output: tracing::Span,
 }
@@ -240,7 +267,6 @@ impl ModelWeights {
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
                 cos: cos.clone(),
                 sin: sin.clone(),
-                kv_cache: None,
                 span_attn,
                 span_rot,
                 span_mlp,
@@ -253,7 +279,6 @@ impl ModelWeights {
             layers,
             norm,
             output: QMatMul::from_qtensor(output),
-            masks: HashMap::new(),
             span,
             span_output,
         })
@@ -318,7 +343,6 @@ impl ModelWeights {
                 head_dim: embedding_length / head_count,
                 cos: cos.clone(),
                 sin: sin.clone(),
-                kv_cache: None,
                 span_attn,
                 span_rot,
                 span_mlp,
@@ -331,35 +355,37 @@ impl ModelWeights {
             layers,
             norm,
             output: QMatMul::from_qtensor(output),
-            masks: HashMap::new(),
             span,
             span_output,
         })
     }
 
-    fn mask(&mut self, t: usize) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
-            Ok(mask.clone())
-        } else {
-            let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
-                .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), &Device::Cpu)?;
-            self.masks.insert(t, mask.clone());
-            Ok(mask)
-        }
+    pub fn create_kv_cache(&self) -> Vec<Option<(Tensor, Tensor)>> {
+        self.layers.iter().map(|_| None).collect::<Vec<_>>()
     }
 
-    pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        x: &Tensor,
+        index_pos: usize,
+        mask: &Tensor,
+        kv_cache: &Vec<Option<(Tensor, Tensor)>>,
+    ) -> Result<(Tensor, Vec<Option<(Tensor, Tensor)>>)> {
         let (_b_sz, seq_len) = x.dims2()?;
-        let mask = self.mask(seq_len)?;
         let _enter = self.span.enter();
         let mut layer_in = self.tok_embeddings.forward(x)?;
-        for layer in self.layers.iter_mut() {
+        let mut new_kv_cache = kv_cache.clone();
+        for ((layer, prv_kv_value), nxt_kv_value) in self
+            .layers
+            .iter()
+            .zip(kv_cache.iter())
+            .zip(new_kv_cache.iter_mut())
+        {
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
-            let attn = layer.forward_attn(&x, &mask, index_pos)?;
+            let (attn, kv_value) = layer.forward_attn(&x, &mask, index_pos, prv_kv_value)?;
+            *nxt_kv_value = kv_value;
             let x = (attn + residual)?;
 
             // MLP
@@ -376,7 +402,8 @@ impl ModelWeights {
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
-        self.output.forward(&x)
+        let x = self.output.forward(&x)?;
+        Ok((x, new_kv_cache))
     }
 }
 
